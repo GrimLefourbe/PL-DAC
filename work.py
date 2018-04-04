@@ -7,6 +7,8 @@ import torch
 import torch.optim as optim
 import numpy as np
 
+import itertools as it
+
 from models import Generator, Discriminator
 
 ToPIL = transforms.ToPILImage()
@@ -27,79 +29,105 @@ def show_im(t):
     ToPIL(t).show()
 
 if __name__ == '__main__':
-    batch_size = 8
+    batch_size = 4
+
     dataloader = DataLoader(datasets.ObjectsDataset({'id':2, 'name':'bicycle'},
-                                                    obj_transform=transforms.Compose([transforms.Resize((20,20)),
+                                                    obj_transform=transforms.Compose([transforms.Resize((32,32)),
                                                                                       transforms.ToTensor()]),
-                                                    bg_transform=transforms.Compose([transforms.Resize((40,40)),
-                                                                                     transforms.ToTensor()])),
+                                                    bg_transform=transforms.Compose([transforms.Resize((64,64)),
+                                                                                     transforms.ToTensor()]), nbperobj=1),
                             batch_size=batch_size, shuffle=False, num_workers=4)
-    G = Generator()
+    print(len(dataloader))
+    G = Generator(nb_embeddings=len(dataloader)*batch_size)
     D = Discriminator()
-    i = dataloader.__iter__().next()
-    obj, bg = i['obj'], i['bg']
+
+    criterion = nn.BCELoss()
+
+
+    outf = "bicycles"
+    real_label = 0.9
+    fake_label = 0.1
     coord = torch.IntTensor([10, 10])
 
-    o, b = Variable(obj), Variable(bg)
-    c = Variable(coord)
-    real_im = bg.clone()
-    fake_im = G(o, b, c)
+    lr = 2*1e-4
+    betas = (0.5, 0.999)
 
-    show_im(real_im[0])
-    show_im(o[0].data)
-    show_im(fake_im[0].data)
+    niter = 25
 
+    optimizerD = optim.Adam(D.parameters(), lr=lr, betas=betas)
+    optimizerG = optim.Adam(G.parameters(), lr=lr*100, betas=betas)
 
-    criterion = nn.BCELoss()
-    d_optimizer = optim.SGD(D.parameters(), lr=0.001, momentum=0.9)
+    for epoch in range(niter):
+        for i, data in it.islice(enumerate(dataloader), 5):
 
-    d_learning_rate = 2e-4
-    g_learning_rate = 2e-3
-    optim_betas = (0.9, 0.999)
-    num_epochs = 2
-    print_interval = 200
-    d_steps = 1
-    g_steps = 2
+            #update D network
+            D.zero_grad()
 
-    criterion = nn.BCELoss()
+            obj, bg = data['obj'], data['bg']
+            obj_id = torch.arange(i*batch_size, (i+1)*batch_size).long()
 
-    d_optimizer = optim.Adam(D.parameters(), lr=d_learning_rate, betas=optim_betas)
-    g_optimizer = optim.Adam(G.parameters(), lr=g_learning_rate, betas=optim_betas)
+            # train with real
+            real_inputv = Variable(bg)
+            real_labelv = Variable(torch.ones((batch_size, 1))*real_label)
 
-    for epoch in range(num_epochs):
-        for d_index in range(d_steps):
-            for i, data in enumerate(dataloader):
-                D.zero_grad()
-                d_real_data = Variable(data['bg'])
-                d_real_decision = D(d_real_data)
-                d_real_error = criterion(d_real_decision, Variable(torch.ones(batch_size, 1)))
-                d_real_error.backward()
+            real_output = D(real_inputv)
+            errD_real = criterion(real_output, real_labelv)
+            errD_real.backward()
+            D_x = real_output.data.mean()
 
-                obj, bg, coord = Variable(data['obj']), Variable(data['bg']), Variable(torch.IntTensor([10, 10]))
-                d_fake_data = G(obj, bg, coord).detach()
-                d_fake_decision = D(d_fake_data)
-                d_fake_error = criterion(d_fake_decision, Variable(torch.zeros(batch_size, 1)))
-                d_fake_error.backward()
-                d_optimizer.step()
-                print(f'{epoch} {d_index} d_fake_error : {d_fake_error.data[0]}')
-                print(f'{epoch} {d_index} d_real_error : {d_real_error.data[0]}')
+            #train with fake
+            objv, bgv, coordv, obj_idv = Variable(obj), Variable(bg), Variable(coord), Variable(obj_id)
+            fake_input = G(objv, bgv, coordv, obj_idv)
+            fake_labelv = Variable(torch.ones((batch_size, 1))*fake_label)
+            fake_output = D(fake_input.detach())
 
-        for g_index in range(g_steps):
-            for i, data in enumerate(dataloader):
-                G.zero_grad()
+            if i == 0:
+                show_im(real_inputv.data[0])
+                show_im(fake_input.data[0])
 
-                obj, bg, coord = Variable(data['obj']), Variable(data['bg']), Variable(torch.IntTensor([10, 10]))
-                g_fake_data = G(obj, bg, coord)
-                dg_fake_decision = D(g_fake_data)
-                g_error = criterion(dg_fake_decision, Variable(torch.ones(batch_size, 1)))
-                g_error.backward()
-                g_optimizer.step()
+            errD_fake = criterion(fake_output, fake_labelv)
+            errD_fake.backward()
 
-                print(f'{epoch} {g_index} g_error : {g_error.data[0]}')
+            D_G_z1 = fake_output.data.mean()
 
-    fake_im = G(o, b, c)
+            errD = errD_real + errD_fake
 
-    show_im(real_im[0])
-    show_im(o[0].data)
-    show_im(fake_im[0].data)
+            if errD.data[0] > 0:
+                optimizerD.step()
+            else:
+                print('skipping Dstep')
 
+            #update G network
+            G.zero_grad()
+            labelv = Variable(torch.ones((batch_size, 1))*real_label)
+
+#            objv, bgv, coordv, obj_idv = Variable(obj), Variable(bg), Variable(coord), Variable(obj_id)
+            output = D(fake_input)
+
+            errG = criterion(output, labelv)
+            errG.backward()
+
+            print(G.embeddings.weight.grad)
+            D_G_z2 = output.data.mean()
+
+            optimizerG.step()
+
+            # while errG.data[0] > 0.8:
+            #     G.zero_grad()
+            #     labelv = Variable(torch.ones((batch_size, 1)) * real_label)
+            #
+            #     objv, bgv, coordv, obj_idv = Variable(obj), Variable(bg), Variable(coord), Variable(obj_id)
+            #     output = D(G(objv, bgv, coordv, obj_idv))
+            #
+            #     errG = criterion(output, labelv)
+            #     errG.backward()
+            #     D_G_z2 = output.data.mean()
+            #
+            #     optimizerG.step()
+            #     print(f'Loss_G: {errG.data[0]}')
+
+            print(f'[{epoch}/{niter}][{i}/{len(dataloader)}] Loss_D: {errD.data[0]:f} Loss_G: {errG.data[0]:f} '
+                  f'D(x): {D_x:f} D(G(z)): {D_G_z1:f} / {D_G_z2:f}')
+
+    torch.save(G.state_dict(), '%s/netG_epoch_%d.pth' % (outf, epoch))
+    torch.save(D.state_dict(), '%s/netD_epoch_%d.pth' % (outf, epoch))
