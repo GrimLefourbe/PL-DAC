@@ -3,6 +3,7 @@ import torch.nn as nn
 from torchvision import transforms
 from torch.utils.data import DataLoader
 from torch.autograd import Variable
+from sklearn.model_selection import train_test_split
 import torch
 import torch.optim as optim
 import numpy as np
@@ -13,33 +14,59 @@ from models import Generator, Discriminator
 
 ToPIL = transforms.ToPILImage()
 
-def test(data_loader, G, D):
-    fake_res = []
-    real_res = []
-    for i, data in enumerate(data_loader):
+def test_D(test_loader, G, D, batch_size, coord):
+    correct = 0
+    for i, data in enumerate(test_loader):
         obj, bg = data['obj'], data['bg']
-        real_res.append(D(Variable(bg)))
-        v_obj, v_bg, v_coord = Variable(obj), Variable(bg), Variable(torch.IntTensor([10, 10]))
-        fake_res.append(D(G(v_obj, v_bg, v_coord).detach()))
-#    fake_res = np.vstack(fake_res)
-#    real_res = np.vstack(real_res)
-    return fake_res, real_res
+
+        real_inputv = Variable(bg)
+        real_pred = torch.round(D(real_inputv)).data.numpy()
+
+        coord = torch.IntTensor(np.random.randint(64 - 8, size=2))
+        obj_id = torch.arange(i * batch_size, (i + 1) * batch_size).long()
+
+        objv, bgv, coordv, obj_idv = Variable(obj), Variable(bg), Variable(coord), Variable(obj_id)
+
+        fake_input = G(objv, bgv, coordv, obj_idv).detach()
+        fake_pred = torch.round(D(fake_input)).data.numpy()
+
+        correct += np.count_nonzero(real_pred == 1)
+        correct += np.count_nonzero(fake_pred == 0)
+    prec = correct / (len(test_loader) * batch_size * 2)
+    print(prec)
+    return prec
+
+
+def train_test_indices(n, p_train):
+    train_len = int(n * p_train)
+    indices = np.arange(n)
+    np.random.shuffle(indices)
+    return indices[:train_len], indices[train_len:]
 
 def show_im(t):
     ToPIL(t).show()
 
 if __name__ == '__main__':
     batch_size = 4
+    D_ndf = 32
+    obj_format = (8, 8)
 
-    dataloader = DataLoader(datasets.ObjectsDataset({'id':2, 'name':'bicycle'},
-                                                    obj_transform=transforms.Compose([transforms.Resize((32,32)),
+    dataset = datasets.ObjectsDataset({'id':2, 'name':'bicycle'}, nbperobj=20,
+                                                    obj_transform=transforms.Compose([transforms.Resize(obj_format),
                                                                                       transforms.ToTensor()]),
                                                     bg_transform=transforms.Compose([transforms.Resize((64,64)),
-                                                                                     transforms.ToTensor()]), nbperobj=1),
-                            batch_size=batch_size, shuffle=False, num_workers=4)
-    print(len(dataloader))
-    G = Generator(nb_embeddings=len(dataloader)*batch_size)
-    D = Discriminator()
+                                                                                     transforms.ToTensor()]))
+    train_indices, test_indices = train_test_indices(len(dataset), p_train=0.95)
+
+    trainset = datasets.SubsetDataset(dataset, train_indices)
+    testset = datasets.SubsetDataset(dataset, test_indices)
+
+    trainloader = DataLoader(trainset, batch_size=batch_size, shuffle=False, num_workers=4, drop_last=True)
+    testloader = DataLoader(testset, batch_size=batch_size, shuffle=False, num_workers=4, drop_last=True)
+
+    print(len(trainloader))
+    G = Generator(nb_embeddings=len(trainloader) * batch_size, obj_format=obj_format)
+    D = Discriminator(ndf=D_ndf)
 
     criterion = nn.BCELoss()
 
@@ -49,16 +76,20 @@ if __name__ == '__main__':
     fake_label = 0.1
     coord = torch.IntTensor([10, 10])
 
+    train_gen = False
+
     lr = 2*1e-4
     betas = (0.5, 0.999)
 
     niter = 25
 
     optimizerD = optim.Adam(D.parameters(), lr=lr, betas=betas)
-    optimizerG = optim.Adam(G.parameters(), lr=lr*100, betas=betas)
+    optimizerG = optim.Adam(G.parameters(), lr=lr, betas=betas)
+
+    prec = [test_D(testloader, G, D, batch_size, coord)]
 
     for epoch in range(niter):
-        for i, data in it.islice(enumerate(dataloader), 5):
+        for i, data in enumerate(trainloader):
 
             #update D network
             D.zero_grad()
@@ -74,6 +105,8 @@ if __name__ == '__main__':
             errD_real = criterion(real_output, real_labelv)
             errD_real.backward()
             D_x = real_output.data.mean()
+
+            coord = torch.IntTensor(np.random.randint(64 - 8, size=2))
 
             #train with fake
             objv, bgv, coordv, obj_idv = Variable(obj), Variable(bg), Variable(coord), Variable(obj_id)
@@ -97,37 +130,26 @@ if __name__ == '__main__':
             else:
                 print('skipping Dstep')
 
-            #update G network
-            G.zero_grad()
-            labelv = Variable(torch.ones((batch_size, 1))*real_label)
+            if train_gen:
+                #update G network
+                G.zero_grad()
+                labelv = Variable(torch.ones((batch_size, 1))*real_label)
 
-#            objv, bgv, coordv, obj_idv = Variable(obj), Variable(bg), Variable(coord), Variable(obj_id)
-            output = D(fake_input)
+                output = D(fake_input)
 
-            errG = criterion(output, labelv)
-            errG.backward()
+                errG = criterion(output, labelv)
+                errG.backward()
 
-            print(G.embeddings.weight.grad)
-            D_G_z2 = output.data.mean()
+                print(G.embeddings.weight.grad.max().data[0])
+                D_G_z2 = output.data.mean()
 
-            optimizerG.step()
+                optimizerG.step()
 
-            # while errG.data[0] > 0.8:
-            #     G.zero_grad()
-            #     labelv = Variable(torch.ones((batch_size, 1)) * real_label)
-            #
-            #     objv, bgv, coordv, obj_idv = Variable(obj), Variable(bg), Variable(coord), Variable(obj_id)
-            #     output = D(G(objv, bgv, coordv, obj_idv))
-            #
-            #     errG = criterion(output, labelv)
-            #     errG.backward()
-            #     D_G_z2 = output.data.mean()
-            #
-            #     optimizerG.step()
-            #     print(f'Loss_G: {errG.data[0]}')
+            print(f'[{epoch+1}/{niter}][{i}/{len(trainloader)}] Loss_D: {errD.data[0]:f} ' +
+                  (f'Loss_G: {errG.data[0]:f} ' if train_gen else '') +
+                  f'D(x): {D_x:f} ' +
+                  f'D(G(z)): {D_G_z1:f} ' + ('/ {D_G_z2:f} ' if train_gen else ''))
 
-            print(f'[{epoch}/{niter}][{i}/{len(dataloader)}] Loss_D: {errD.data[0]:f} Loss_G: {errG.data[0]:f} '
-                  f'D(x): {D_x:f} D(G(z)): {D_G_z1:f} / {D_G_z2:f}')
-
-    torch.save(G.state_dict(), '%s/netG_epoch_%d.pth' % (outf, epoch))
-    torch.save(D.state_dict(), '%s/netD_epoch_%d.pth' % (outf, epoch))
+        prec.append(test_D(test_loader=testloader, G=G, D=D, batch_size=batch_size, coord=coord))
+        torch.save(G.state_dict(), f'{outf}/netG_epoch_{epoch}.pth')
+        torch.save(D.state_dict(), f'{outf}/netD_ndf_{D_ndf}_epoch_{epoch}.pth')

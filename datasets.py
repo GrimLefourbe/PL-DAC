@@ -89,6 +89,16 @@ class ObjectsDataset(torch.utils.data.Dataset):
         obj = Image.open(os.path.join(f'{self.objects_folder}',f'{self.category["id"]}_{self.category["name"]}', f'{obj_id}.jpg'))
         return {'obj': self.transform(obj), 'bg': self.bg_dset[item % self.nbperobj][0]}
 
+class SubsetDataset(torch.utils.data.Dataset):
+    def __init__(self, dataset, indices):
+        super().__init__()
+        self.dataset = dataset
+        self.indices = indices
+    def __len__(self):
+        return len(self.indices)
+
+    def __getitem__(self, item):
+        return self.dataset[self.indices[item]]
 
 def get_cat_as_tensors(cat, storage=storageFolder):
     return np.array(torch.serialization.load(open(os.path.join(storage, f"{cat['id']}_{cat['name']}", 'all.pkl'),'rb')))
