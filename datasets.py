@@ -70,24 +70,42 @@ def sort_into_cats2(cats, dset, base_folder=storageFolder):
 
 
 class ObjectsDataset(torch.utils.data.Dataset):
-    def __init__(self, category, nbperobj=10, obj_transform=transforms.ToTensor(), bg_transform=transforms.ToTensor(), objects_folder=storageFolder, background_folder=img_folder, annFile=instFile):
+    def __init__(self, category, nbperobj=10, shuffled=False, obj_format=(8, 8), bg_format=(64, 64), maxsize=-1,
+                 obj_transform=transforms.ToTensor(), bg_transform=transforms.ToTensor(),
+                 objects_folder=storageFolder, background_folder=img_folder, annFile=instFile):
         super().__init__()
         self.objects_folder = objects_folder
         self.bg_folder = background_folder
-        self.bg_dset = dset.CocoDetection(root=background_folder, annFile=annFile, transform=bg_transform)
+
+        self.obj_transform = transforms.Compose([transforms.Resize(obj_format), obj_transform])
+        self.bg_transform = transforms.Compose([transforms.Resize(bg_format), bg_transform])
+
+        self.bg_dset = dset.CocoDetection(root=background_folder, annFile=annFile, transform=self.bg_transform)
+
         self.category = category
-        self.nbperobj = nbperobj
-        self.transform=obj_transform
+        self.nbperobj = min(nbperobj, self.bg_dset.__len__())
+
         self.anns = pkl.load(open(os.path.join(f'{objects_folder}', f'{category["id"]}_{category["name"]}', 'all.pkl'), 'rb'))
+        self.indices = np.arange(len(self.anns)*self.nbperobj)
+        self.coords = np.hstack((np.random.randint(bg_format[0] - obj_format[0], size=(len(self.indices), 1)),
+                                 np.random.randint(bg_format[1] - obj_format[1], size=(len(self.indices), 1))))
+
+        if shuffled:
+            np.random.shuffle(self.indices)
+        if maxsize > 0:
+            self.indices = self.indices[:maxsize]
 
     def __len__(self):
-        return len(self.anns)*self.nbperobj
+        return len(self.indices)
 
 
     def __getitem__(self, item):
-        obj_id = self.anns[item//self.nbperobj]['id']
+        idx = self.indices[item]
+
+        obj_id = self.anns[idx//self.nbperobj]['id']
         obj = Image.open(os.path.join(f'{self.objects_folder}',f'{self.category["id"]}_{self.category["name"]}', f'{obj_id}.jpg'))
-        return {'obj': self.transform(obj), 'bg': self.bg_dset[item % self.nbperobj][0]}
+
+        return self.obj_transform(obj), self.bg_dset[idx % self.nbperobj][0], torch.IntTensor(self.coords[idx])
 
 class SubsetDataset(torch.utils.data.Dataset):
     def __init__(self, dataset, indices):

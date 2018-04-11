@@ -14,15 +14,14 @@ from models import Generator, Discriminator
 
 ToPIL = transforms.ToPILImage()
 
-def test_D(test_loader, G, D, batch_size, coord):
+def test_D(test_loader, G, D, batch_size):
     correct = 0
     for i, data in enumerate(test_loader):
-        obj, bg = data['obj'], data['bg']
+        obj, bg, coord = data
 
         real_inputv = Variable(bg)
         real_pred = torch.round(D(real_inputv)).data.numpy()
 
-        coord = torch.IntTensor(np.random.randint(64 - 8, size=2))
         obj_id = torch.arange(i * batch_size, (i + 1) * batch_size).long()
 
         objv, bgv, coordv, obj_idv = Variable(obj), Variable(bg), Variable(coord), Variable(obj_id)
@@ -49,20 +48,25 @@ def show_im(t):
 if __name__ == '__main__':
     batch_size = 4
     D_ndf = 32
-    obj_format = (8, 8)
+    nbperobj = 100000
+    maxsize = 16000
 
-    dataset = datasets.ObjectsDataset({'id':2, 'name':'bicycle'}, nbperobj=20,
-                                                    obj_transform=transforms.Compose([transforms.Resize(obj_format),
-                                                                                      transforms.ToTensor()]),
-                                                    bg_transform=transforms.Compose([transforms.Resize((64,64)),
-                                                                                     transforms.ToTensor()]))
+    bg_format = (64, 64)
+    obj_format = (8, 8)
+    category = {'id':2, 'name': 'bicycle'}
+
+    np.random.seed(47)
+
+    dataset = datasets.ObjectsDataset(category, nbperobj=nbperobj, shuffled=True, maxsize=maxsize,
+                                      obj_format=obj_format, bg_format=bg_format)
+
     train_indices, test_indices = train_test_indices(len(dataset), p_train=0.95)
 
     trainset = datasets.SubsetDataset(dataset, train_indices)
     testset = datasets.SubsetDataset(dataset, test_indices)
 
-    trainloader = DataLoader(trainset, batch_size=batch_size, shuffle=False, num_workers=4, drop_last=True)
-    testloader = DataLoader(testset, batch_size=batch_size, shuffle=False, num_workers=4, drop_last=True)
+    trainloader = DataLoader(trainset, batch_size=batch_size, shuffle=False, num_workers=2, drop_last=True)
+    testloader = DataLoader(testset, batch_size=batch_size, shuffle=False, num_workers=2, drop_last=True)
 
     print(len(trainloader))
     G = Generator(nb_embeddings=len(trainloader) * batch_size, obj_format=obj_format)
@@ -72,13 +76,13 @@ if __name__ == '__main__':
 
 
     outf = "bicycles"
+
     real_label = 0.9
     fake_label = 0.1
-    coord = torch.IntTensor([10, 10])
 
     train_gen = False
 
-    lr = 2*1e-4
+    lr = 4*2*1e-4
     betas = (0.5, 0.999)
 
     niter = 25
@@ -86,15 +90,16 @@ if __name__ == '__main__':
     optimizerD = optim.Adam(D.parameters(), lr=lr, betas=betas)
     optimizerG = optim.Adam(G.parameters(), lr=lr, betas=betas)
 
-    prec = [test_D(testloader, G, D, batch_size, coord)]
+    prec = [test_D(testloader, G, D, batch_size)]
 
     for epoch in range(niter):
-        for i, data in enumerate(trainloader):
+        for i, data in enumerate(trainloader):# for each batch
 
             #update D network
             D.zero_grad()
 
-            obj, bg = data['obj'], data['bg']
+            obj, bg, coord = data
+
             obj_id = torch.arange(i*batch_size, (i+1)*batch_size).long()
 
             # train with real
@@ -106,7 +111,6 @@ if __name__ == '__main__':
             errD_real.backward()
             D_x = real_output.data.mean()
 
-            coord = torch.IntTensor(np.random.randint(64 - 8, size=2))
 
             #train with fake
             objv, bgv, coordv, obj_idv = Variable(obj), Variable(bg), Variable(coord), Variable(obj_id)
@@ -145,11 +149,15 @@ if __name__ == '__main__':
 
                 optimizerG.step()
 
-            print(f'[{epoch+1}/{niter}][{i}/{len(trainloader)}] Loss_D: {errD.data[0]:f} ' +
+            print(f'[{epoch+1}/{niter}][{i+1}/{len(trainloader)}] Loss_D: {errD.data[0]:f} ' +
                   (f'Loss_G: {errG.data[0]:f} ' if train_gen else '') +
                   f'D(x): {D_x:f} ' +
                   f'D(G(z)): {D_G_z1:f} ' + ('/ {D_G_z2:f} ' if train_gen else ''))
 
-        prec.append(test_D(test_loader=testloader, G=G, D=D, batch_size=batch_size, coord=coord))
+        prec.append(test_D(test_loader=testloader, G=G, D=D, batch_size=batch_size))
         torch.save(G.state_dict(), f'{outf}/netG_epoch_{epoch}.pth')
         torch.save(D.state_dict(), f'{outf}/netD_ndf_{D_ndf}_epoch_{epoch}.pth')
+
+    import pickle
+    pickle.dump(prec, open(f'{outf}/Dprec_nbperobj_{nbperobj}_ndf_{D_ndf}_obj_{obj_format[0]}_{obj_format[1]}_maxsize_{maxsize}.pkl', 'wb'))
+

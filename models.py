@@ -34,9 +34,9 @@ class Generator(nn.Module):
 #        mask.fill_(0)
         mask = embed.view((batch_size, obj_w, obj_h))
 #        print(torch.mean(mask).data[0], torch.max(mask).data[0], torch.min(mask).data[0])
-        x, y = coord.data
         im = bg.clone()
         for i in range(batch_size):
+            x, y = coord[i].data
             im[i, :, x: x + obj_w, y:y+obj_h] = (1 - mask[i].float()) * im[i, :, x:x+obj_w, y:y+obj_h].clone() \
                                                 + mask[i].float()*obj[i]
         return im
