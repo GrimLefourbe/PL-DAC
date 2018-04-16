@@ -23,13 +23,13 @@ class Generator(nn.Module):
         super().__init__()
         self.embeddings = nn.Embedding(num_embeddings=nb_embeddings, embedding_dim=obj_format[0]*obj_format[1])
         self.s = nn.Sigmoid()
-        self.embeddings.weight.data = torch.ones(nb_embeddings, obj_format[0]*obj_format[1]) * 1
+#        self.embeddings.weight.data = torch.ones(nb_embeddings, obj_format[0]*obj_format[1]) * 1
 #        self.embeddings.weight.data = torch.rand(nb_embeddings, obj_format[0]*obj_format[1])*1 + (-0.5)
         self.embeddings.weight.requires_grad = True
 
     def forward(self, obj, bg, coord, obj_id):
 #        print(obj.shape, bg.shape)
-        embed = self.embeddings(obj_id)
+        embed = self.s(self.embeddings(obj_id))
         batch_size, obj_w, obj_h = obj.shape[0], obj.shape[2], obj.shape[3]
 #        mask.fill_(0)
         mask = embed.view((batch_size, obj_w, obj_h))
@@ -39,7 +39,7 @@ class Generator(nn.Module):
             x, y = coord[i].data
             im[i, :, x: x + obj_w, y:y+obj_h] = (1 - mask[i].float()) * im[i, :, x:x+obj_w, y:y+obj_h].clone() \
                                                 + mask[i].float()*obj[i]
-        return im
+        return im, mask
 
 class Discriminator(nn.Module):
     def __init__(self, nc=3, ndf=32):
