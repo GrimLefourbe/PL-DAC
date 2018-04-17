@@ -30,13 +30,13 @@ if __name__ == '__main__':
     start = time.perf_counter()
     np.random.seed(47)
 
-    outf = Path("tests/G3")
+    outf = Path("tests/G6")
     outf.mkdir(parents=True, exist_ok=True)
     nb_images = 30
 
     train_gen = True
 
-    batch_size = 128
+    batch_size = 256
     D_ndf = 32
     nbperobj = 32000
     maxsize = 32000
@@ -54,7 +54,7 @@ if __name__ == '__main__':
 
     if train_gen:
         _, test_indices = train_test_indices(len(dataset), p_train=0.95)
-        trainloader = DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=8, drop_last=True, pin_memory=True)
+        trainloader = DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=4, drop_last=True, pin_memory=True)
         testloader = DataLoader(datasets.SubsetDataset(dataset, test_indices),
                                 batch_size=batch_size, shuffle=False, num_workers=0, drop_last=True, pin_memory=True)
         print('Loaders prepped')
@@ -62,7 +62,7 @@ if __name__ == '__main__':
         train_indices, test_indices = train_test_indices(len(dataset), p_train=0.95)
 
         trainloader = DataLoader(datasets.SubsetDataset(dataset, train_indices),
-                                 batch_size=batch_size, shuffle=False, num_workers=8, drop_last=True)
+                                 batch_size=batch_size, shuffle=False, num_workers=4, drop_last=True)
         testloader = DataLoader(datasets.SubsetDataset(dataset, test_indices),
                                 batch_size=batch_size, shuffle=False, num_workers=0, drop_last=True)
 
@@ -75,7 +75,8 @@ if __name__ == '__main__':
     real_label = 0.9
     fake_label = 0.1
 
-    lr = 4*2*1e-4
+    lr = 2*1e-4
+    g_to_d_lr = 125
     betas = (0.5, 0.999)
 
     niter = 25
@@ -84,7 +85,7 @@ if __name__ == '__main__':
     G = Generator(nb_embeddings=len(trainloader) * batch_size, obj_format=obj_format)
 
     optimizerD = optim.Adam(D.parameters(), lr=lr, betas=betas)
-    optimizerG = optim.Adam(G.parameters(), lr=100*lr, betas=betas)
+    optimizerG = optim.Adam(G.parameters(), lr=g_to_d_lr*lr, betas=betas)
 
     bg = torch.FloatTensor(batch_size, 3, bg_format[0], bg_format[1])
     obj = torch.FloatTensor(batch_size, 3, obj_format[0], obj_format[1])
@@ -157,8 +158,9 @@ if __name__ == '__main__':
         obj_id = Variable(torch.LongTensor(image_indices).cuda())
 
         fake, masks = G(obj, bg, coord, obj_id)
-
-        grid = utils.make_grid(torch.cat((bg.data, fake.data)), nrow=10)
+        images = [fake[i//2].data if i%2 else bg[i//2].data for i in range(2*len(image_indices))]
+        grid = utils.make_grid(torch.stack(images), nrow=10)
+        print(grid.shape)
         return grid
 
     grid = make_test_grid()
@@ -215,14 +217,29 @@ if __name__ == '__main__':
                 optimizerD.step()
             else:
                 print('skipping Dstep')
+            print(f'[{epoch+1}/{niter}][{i+1}/{len(trainloader)}] Loss_D: {errD.data[0]:f} ' +
+                  f'D(x): {D_x:f} ' +
+                  f'D(G(z)): {D_G_z1:f} ')
+
+        prec, mean, std = test_D(testloader, G, D)
+        precisions.append(prec)
+        means.append(mean)
+        stds.append(std)
+
+        print(prec, mean, std, sep=' ')
 
         if train_gen:
-
             for i, (cpu_obj, cpu_bg, cpu_coord) in enumerate(trainloader):  # for each batch
+
                 bg.copy_(cpu_bg)
                 obj.copy_(cpu_obj)
                 coord.copy_(cpu_coord)
                 obj_id.copy_(torch.arange(i * batch_size, (i + 1) * batch_size).long())
+
+                objv, bgv, coordv, obj_idv = Variable(obj), Variable(bg), Variable(coord), Variable(obj_id)
+
+                fake_input, masks = G(objv, bgv, coordv, obj_idv)
+
                 #update G network
                 G.zero_grad()
 
@@ -239,31 +256,32 @@ if __name__ == '__main__':
 
                 optimizerG.step()
 
-            print(f'[{epoch+1}/{niter}][{i+1}/{len(trainloader)}] Loss_D: {errD.data[0]:f} ' +
-                  (f'Loss_G: {errG.data[0]:f} ' if train_gen else '') +
-                  f'D(x): {D_x:f} ' +
-                  f'D(G(z)): {D_G_z1:f} ' + (f'/ {D_G_z2:f} ' if train_gen else ''))
 
-        prec, mean, std = test_D(testloader, G, D)
+                print(f'[{epoch+1}/{niter}][{i+1}/{len(trainloader)}] ' +
+                      f'Loss_G: {errG.data[0]:f} ' +
+                      f'D(G(z)): {D_G_z2:f}')
+
+            prec, mean, std = test_D(testloader, G, D)
+            precisions.append(prec)
+            means.append(mean)
+            stds.append(std)
+            print(prec, mean, std, sep=' ')
+
         grid = make_test_grid()
 
-        precisions.append(prec)
-        means.append(mean)
-        stds.append(std)
         grids.append(grid)
         grad_norms.append(grad_norm)
 
-        print(prec, mean, std, sep=' ')
         torch.save(G.state_dict(), f'{outf}/netG_epoch_{epoch}.pth')
         torch.save(D.state_dict(), f'{outf}/netD_ndf_{D_ndf}_epoch_{epoch}.pth')
 
-    results = {'nbperobj': nbperobj, 'D_ndf': D_ndf, 'obj_format': obj_format, 'maxsize': maxsize, 'batch_size': batch_size,
+    results = {'nbperobj': nbperobj, 'D_ndf': D_ndf, 'obj_format': obj_format, 'maxsize': maxsize, 'batch_size': batch_size, 'glr':g_to_d_lr, 'lr':lr, 'niter':niter,
                'train_gen': train_gen,
-               'precision': precisions, 'means': means, 'stds': stds}
+               'precision': np.array(precisions), 'means': np.array(means), 'stds': np.array(stds), 'grad_norms': np.array(grad_norms)}
 
-    import pickle
-    name = f'glr100_Dprec_Gmean_Gstd_' + ('nog_' if not train_gen else '') +\
-               f'nbperobj_{nbperobj}_ndf_{D_ndf}_obj_{obj_format[0]}_{obj_format[1]}_maxsize_{maxsize}_bsize_{batch_size}'
+    import pickle, random
+    name = f'Dprec_Gmean_Gstd_grad_' + ('nog_' if not train_gen else '') +\
+               f'nbperobj_{nbperobj}_ndf_{D_ndf}_obj_{obj_format[0]}_{obj_format[1]}_maxsize_{maxsize}_bsize_{batch_size}_{random.randint(0, 2**31)})'
     outf = outf / name
     outf.mkdir(exist_ok=True)
     pickle.dump(results, open(outf / 'perf.pkl', 'wb'))
