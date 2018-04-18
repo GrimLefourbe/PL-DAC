@@ -4,7 +4,7 @@ import numpy as np
 from pathlib import Path
 
 if __name__ == '__main__':
-    folder = Path('tests/G4')
+    folder = Path('tests/G8')
     # prec4 = pickle.load(open('bicycles/Dprec_ndf_4.pkl', 'rb'))
     # prec16 = pickle.load(open('bicycles/Dprec_ndf_16.pkl', 'rb'))
     # prec32 = pickle.load(open('bicycles/Dprec_ndf_32.pkl', 'rb'))
@@ -13,14 +13,13 @@ if __name__ == '__main__':
     # prec50 = pickle.load(open('bicycles/Dprec_nbperobj_50_ndf_16.pkl', 'rb'))
     # prec100 = pickle.load(open('bicycles/Dprec_nbperobj_100_ndf_16.pkl', 'rb'))
     # prec200 = pickle.load(open('bicycles/Dprec_nbperobj_200_ndf_16.pkl', 'rb'))
-    folder_list = list(folder.glob('glr*'))
+    folder_list = list(folder.glob('Dprec*'))
 
     data = [pickle.load(open(x/'perf.pkl', 'rb')) for x in folder_list]
     labels = ['no G', 'glr = 1000', 'glr = 10', 'glr = 125', 'glr = 1']
 
     for i, d in enumerate(data):
         plt.figure()
-        plt.title(labels[i])
         plt.ylim([0, 1])
         niter = len(d['grad_norms'])
         prec_G = np.array([d['precision'][i] for i in range(len(d['precision'])) if not i%2])
@@ -35,6 +34,7 @@ if __name__ == '__main__':
         l_stddown, = plt.plot(mean_G - std_G, 'r--', label='mean - 1 std')
         plt.legend(handles=[l_G, l_D, l_mean, l_stdup, l_stddown])
 
+    plt.show()
     # precisions = [np.array(pickle.load(open(x, 'rb'))) for x in folder.glob('*Dprec*nbperobj_100000_*_maxsize_16000*.pkl')]
     # print(len(precisions))
     #

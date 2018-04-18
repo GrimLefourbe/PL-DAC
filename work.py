@@ -30,16 +30,16 @@ if __name__ == '__main__':
     start = time.perf_counter()
     np.random.seed(47)
 
-    outf = Path("tests/G6")
+    outf = Path("tests/G8")
     outf.mkdir(parents=True, exist_ok=True)
     nb_images = 30
 
     train_gen = True
 
-    batch_size = 256
+    batch_size = 128
     D_ndf = 32
-    nbperobj = 32000
-    maxsize = 32000
+    nbperobj = 16000
+    maxsize = 16000
 
     image_indices = np.random.choice(maxsize, replace=False, size=nb_images)
 
@@ -54,15 +54,15 @@ if __name__ == '__main__':
 
     if train_gen:
         _, test_indices = train_test_indices(len(dataset), p_train=0.95)
-        trainloader = DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=4, drop_last=True, pin_memory=True)
+        trainloader = DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=12, drop_last=True)
         testloader = DataLoader(datasets.SubsetDataset(dataset, test_indices),
-                                batch_size=batch_size, shuffle=False, num_workers=0, drop_last=True, pin_memory=True)
+                                batch_size=batch_size, shuffle=False, num_workers=0, drop_last=True)
         print('Loaders prepped')
     else:
         train_indices, test_indices = train_test_indices(len(dataset), p_train=0.95)
 
         trainloader = DataLoader(datasets.SubsetDataset(dataset, train_indices),
-                                 batch_size=batch_size, shuffle=False, num_workers=4, drop_last=True)
+                                 batch_size=batch_size, shuffle=False, num_workers=12, drop_last=True)
         testloader = DataLoader(datasets.SubsetDataset(dataset, test_indices),
                                 batch_size=batch_size, shuffle=False, num_workers=0, drop_last=True)
 
@@ -75,11 +75,11 @@ if __name__ == '__main__':
     real_label = 0.9
     fake_label = 0.1
 
-    lr = 2*1e-4
+    lr = 4*2*1e-4
     g_to_d_lr = 125
     betas = (0.5, 0.999)
 
-    niter = 25
+    niter = 40
 
     D = Discriminator(ndf=D_ndf)
     G = Generator(nb_embeddings=len(trainloader) * batch_size, obj_format=obj_format)
@@ -248,7 +248,7 @@ if __name__ == '__main__':
 
                 output = D(fake_input)
 
-                errG = criterion(output, labelv)
+                errG = criterion(output, labelv) - torch.mean(masks)
                 errG.backward()
 
                 grad_norm = torch.sum(G.embeddings.weight.grad.data**2)**0.5
@@ -281,7 +281,7 @@ if __name__ == '__main__':
 
     import pickle, random
     name = f'Dprec_Gmean_Gstd_grad_' + ('nog_' if not train_gen else '') +\
-               f'nbperobj_{nbperobj}_ndf_{D_ndf}_obj_{obj_format[0]}_{obj_format[1]}_maxsize_{maxsize}_bsize_{batch_size}_{random.randint(0, 2**31)})'
+               f'nbperobj_{nbperobj}_ndf_{D_ndf}_obj_{obj_format[0]}_{obj_format[1]}_maxsize_{maxsize}_bsize_{batch_size}_{random.randint(0, 2**31)}'
     outf = outf / name
     outf.mkdir(exist_ok=True)
     pickle.dump(results, open(outf / 'perf.pkl', 'wb'))
