@@ -1,19 +1,16 @@
-import datasets
-import torch.nn as nn
-from torchvision import transforms, utils
-from torch.utils.data import DataLoader
-from torch.autograd import Variable
-from sklearn.model_selection import train_test_split
-import torch
-import torch.optim as optim
-import numpy as np
-
-import itertools as it
 import time
-
-from models import Generator, Discriminator
-import os
 from pathlib import Path
+
+import numpy as np
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.autograd import Variable
+from torch.utils.data import DataLoader
+from torchvision import transforms, utils
+
+import datasets
+from models import Generator, Discriminator
 
 ToPIL = transforms.ToPILImage()
 
@@ -23,32 +20,60 @@ def train_test_indices(n, p_train):
     np.random.shuffle(indices)
     return indices[:train_len], indices[train_len:]
 
+
 def show_im(t):
     ToPIL(t).show()
+
+def get_higher_better_objective(obj_format):
+    return torch.ones(obj_format)
+
+def gkern(kernlen=21, nsig=3):
+    """Returns a 2D Gaussian kernel array."""
+    import scipy.stats as st
+
+    interval = (2*nsig+1.)/(kernlen)
+    x = np.linspace(-nsig-interval/2., nsig+interval/2., kernlen+1)
+    kern1d = np.diff(st.norm.cdf(x))
+    kernel_raw = np.sqrt(np.outer(kern1d, kern1d))
+    kernel = kernel_raw/kernel_raw.sum()
+    return kernel
+
+def get_gaussian_objective(n):
+    def get_kernel(obj_format):
+        kern = gkern(obj_format[0])**(1/n)
+        max, min = np.max(kern), np.min(kern)
+        kern = (kern - min) / (max - min)
+        return torch.FloatTensor(kern)
+    return get_kernel
 
 if __name__ == '__main__':
     start = time.perf_counter()
     np.random.seed(47)
 
-    outf = Path("tests/G8")
+    outf = Path("tests/F_gen_gauss5_scaling")
     outf.mkdir(parents=True, exist_ok=True)
+
+    extra_name = 'ratio0.1'
+
     nb_images = 30
 
     train_gen = True
 
     batch_size = 128
     D_ndf = 32
-    nbperobj = 16000
+    nb_backgrounds = 16000
     maxsize = 16000
+
+    objective = get_gaussian_objective(5)
 
     image_indices = np.random.choice(maxsize, replace=False, size=nb_images)
 
     bg_format = (64, 64)
-    obj_format = (8, 8)
+    obj_format = (16, 16)
     category = {'id': 16, 'name': 'bird'}
 
 
-    dataset = datasets.ObjectsDataset(category, nbperobj=nbperobj, shuffled=True, maxsize=maxsize,
+    dataset = datasets.ObjectsDataset(category, nbperobj=nb_backgrounds, shuffled=True, maxsize=maxsize,
                                       obj_format=obj_format, bg_format=bg_format,
                                       objects_folder=datasets.TrainStorageFolder, background_folder=datasets.Train_img_folder, annFile=datasets.instTrainFile)
 
@@ -71,15 +96,17 @@ if __name__ == '__main__':
     use_gpu = torch.cuda.is_available()
 
     criterion = nn.BCELoss()
+    mask_basis = torch.ones((batch_size, obj_format[0], obj_format[1])) * objective(obj_format)
+    mask_criterion = nn.L1Loss()
 
     real_label = 0.9
     fake_label = 0.1
 
-    lr = 4*2*1e-4
+    lr = 2*1e-4
     g_to_d_lr = 125
     betas = (0.5, 0.999)
 
-    niter = 40
+    niter = 50
 
     D = Discriminator(ndf=D_ndf)
     G = Generator(nb_embeddings=len(trainloader) * batch_size, obj_format=obj_format)
@@ -102,6 +129,7 @@ if __name__ == '__main__':
         coord = coord.cuda()
         obj_id = obj_id.cuda()
         label = label.cuda()
+        mask_basis = mask_basis.cuda()
 
     def test_D(test_loader, G, D):
         print('Testing')
@@ -163,6 +191,9 @@ if __name__ == '__main__':
         print(grid.shape)
         return grid
 
+    trainloader = list(trainloader)
+    testloader= list(testloader)
+
     grid = make_test_grid()
     prec, mean, std = test_D(testloader, G, D)
     precisions = [prec]
@@ -172,6 +203,8 @@ if __name__ == '__main__':
     grad_norms = []
 
     print(prec, mean, std, sep=' ')
+
+
 
     for epoch in range(niter):
         for i, (cpu_obj, cpu_bg, cpu_coord) in enumerate(trainloader):# for each batch
@@ -190,6 +223,7 @@ if __name__ == '__main__':
             real_labelv = Variable(label)
 
             real_output = D(real_inputv)
+
             errD_real = criterion(real_output, real_labelv)
             errD_real.backward()
             D_x = real_output.data.mean()
@@ -201,10 +235,6 @@ if __name__ == '__main__':
             label.fill_(fake_label)
             fake_labelv = Variable(label)
             fake_output = D(fake_input.detach())
-
-            if False:
-                show_im(real_inputv.cpu().data[0])
-                show_im(fake_input.cpu().data[0])
 
             errD_fake = criterion(fake_output, fake_labelv)
             errD_fake.backward()
@@ -248,7 +278,9 @@ if __name__ == '__main__':
 
                 output = D(fake_input)
 
-                errG = criterion(output, labelv) - torch.mean(masks)
+                mask_basisv = Variable(mask_basis)
+
+                errG = criterion(output, labelv) + 0.1 * mask_criterion(masks, mask_basisv)
                 errG.backward()
 
                 grad_norm = torch.sum(G.embeddings.weight.grad.data**2)**0.5
@@ -261,27 +293,28 @@ if __name__ == '__main__':
                       f'Loss_G: {errG.data[0]:f} ' +
                       f'D(G(z)): {D_G_z2:f}')
 
-            prec, mean, std = test_D(testloader, G, D)
-            precisions.append(prec)
-            means.append(mean)
-            stds.append(std)
-            print(prec, mean, std, sep=' ')
+        prec, mean, std = test_D(testloader, G, D)
+        precisions.append(prec)
+        means.append(mean)
+        stds.append(std)
+        print(prec, mean, std, sep=' ')
 
         grid = make_test_grid()
 
         grids.append(grid)
-        grad_norms.append(grad_norm)
+        if train_gen:
+            grad_norms.append(grad_norm)
 
         torch.save(G.state_dict(), f'{outf}/netG_epoch_{epoch}.pth')
         torch.save(D.state_dict(), f'{outf}/netD_ndf_{D_ndf}_epoch_{epoch}.pth')
 
-    results = {'nbperobj': nbperobj, 'D_ndf': D_ndf, 'obj_format': obj_format, 'maxsize': maxsize, 'batch_size': batch_size, 'glr':g_to_d_lr, 'lr':lr, 'niter':niter,
-               'train_gen': train_gen,
+    results = {'nbperobj': nb_backgrounds, 'D_ndf': D_ndf, 'obj_format': obj_format, 'maxsize': maxsize, 'batch_size': batch_size, 'glr':g_to_d_lr, 'lr':lr, 'niter':niter,
+               'train_gen': train_gen, 'category': category,
                'precision': np.array(precisions), 'means': np.array(means), 'stds': np.array(stds), 'grad_norms': np.array(grad_norms)}
 
     import pickle, random
-    name = f'Dprec_Gmean_Gstd_grad_' + ('nog_' if not train_gen else '') +\
-               f'nbperobj_{nbperobj}_ndf_{D_ndf}_obj_{obj_format[0]}_{obj_format[1]}_maxsize_{maxsize}_bsize_{batch_size}_{random.randint(0, 2**31)}'
+    name = f'Dprec_Gmean_Gstd_grad_' + ('nog_' if not train_gen else '') + '_' + extra_name + '_' +\
+           f'nbperobj_{nb_backgrounds}_ndf_{D_ndf}_obj_{obj_format[0]}_{obj_format[1]}_maxsize_{maxsize}_bsize_{batch_size}_{random.randint(0, 2**31)}'
     outf = outf / name
     outf.mkdir(exist_ok=True)
     pickle.dump(results, open(outf / 'perf.pkl', 'wb'))
