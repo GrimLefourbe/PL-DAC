@@ -68,8 +68,8 @@ if __name__ == '__main__':
 
     image_indices = np.random.choice(maxsize, replace=False, size=nb_images)
 
-    bg_format = (64, 64)
-    obj_format = (16, 16)
+    bg_format = (128, 128)
+    obj_format = (32, 32)
     category = {'id': 16, 'name': 'bird'}
 
 
