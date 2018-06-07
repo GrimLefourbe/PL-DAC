@@ -252,47 +252,47 @@ if __name__ == '__main__':
                   f'D(x): {D_x:f} ' +
                   f'D(G(z)): {D_G_z1:f} ')
 
-        prec, mean, std = test_D(testloader, G, D)
-        precisions.append(prec)
-        means.append(mean)
-        stds.append(std)
+        # prec, mean, std = test_D(testloader, G, D)
+        # precisions.append(prec)
+        # means.append(mean)
+        # stds.append(std)
+        #
+        # print(prec, mean, std, sep=' ')
+        #
+        # if train_gen:
+        #     for i, (cpu_obj, cpu_bg, cpu_coord) in enumerate(trainloader):  # for each batch
 
-        print(prec, mean, std, sep=' ')
+            bg.copy_(cpu_bg)
+            obj.copy_(cpu_obj)
+            coord.copy_(cpu_coord)
+            obj_id.copy_(torch.arange(i * batch_size, (i + 1) * batch_size).long())
 
-        if train_gen:
-            for i, (cpu_obj, cpu_bg, cpu_coord) in enumerate(trainloader):  # for each batch
+            objv, bgv, coordv, obj_idv = Variable(obj), Variable(bg), Variable(coord), Variable(obj_id)
 
-                bg.copy_(cpu_bg)
-                obj.copy_(cpu_obj)
-                coord.copy_(cpu_coord)
-                obj_id.copy_(torch.arange(i * batch_size, (i + 1) * batch_size).long())
+            fake_input, masks = G(objv, bgv, coordv, obj_idv)
 
-                objv, bgv, coordv, obj_idv = Variable(obj), Variable(bg), Variable(coord), Variable(obj_id)
+            #update G network
+            G.zero_grad()
 
-                fake_input, masks = G(objv, bgv, coordv, obj_idv)
+            label.fill_(real_label)
+            labelv = Variable(label)
 
-                #update G network
-                G.zero_grad()
+            output = D(fake_input)
 
-                label.fill_(real_label)
-                labelv = Variable(label)
+            mask_basisv = Variable(mask_basis)
 
-                output = D(fake_input)
+            errG = criterion(output, labelv) + lbda * mask_criterion(masks, mask_basisv)
+            errG.backward()
 
-                mask_basisv = Variable(mask_basis)
+            grad_norm = torch.sum(G.embeddings.weight.grad.data**2)**0.5
+            D_G_z2 = output.data.mean()
 
-                errG = criterion(output, labelv) + lbda * mask_criterion(masks, mask_basisv)
-                errG.backward()
-
-                grad_norm = torch.sum(G.embeddings.weight.grad.data**2)**0.5
-                D_G_z2 = output.data.mean()
-
-                optimizerG.step()
+            optimizerG.step()
 
 
-                print(f'[{epoch+1}/{niter}][{i+1}/{len(trainloader)}] ' +
-                      f'Loss_G: {errG.data[0]:f} ' +
-                      f'D(G(z)): {D_G_z2:f}')
+            print(f'[{epoch+1}/{niter}][{i+1}/{len(trainloader)}] ' +
+                  f'Loss_G: {errG.data[0]:f} ' +
+                  f'D(G(z)): {D_G_z2:f}')
 
         prec, mean, std = test_D(testloader, G, D)
         precisions.append(prec)
