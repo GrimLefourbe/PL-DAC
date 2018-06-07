@@ -102,6 +102,7 @@ if __name__ == '__main__':
     real_label = 0.9
     fake_label = 0.1
 
+    lbda = 0.1
     lr = 2*1e-4
     g_to_d_lr = 125
     betas = (0.5, 0.999)
@@ -280,7 +281,7 @@ if __name__ == '__main__':
 
                 mask_basisv = Variable(mask_basis)
 
-                errG = criterion(output, labelv) + 0.1 * mask_criterion(masks, mask_basisv)
+                errG = criterion(output, labelv) + lbda * mask_criterion(masks, mask_basisv)
                 errG.backward()
 
                 grad_norm = torch.sum(G.embeddings.weight.grad.data**2)**0.5
@@ -308,7 +309,7 @@ if __name__ == '__main__':
         torch.save(G.state_dict(), f'{outf}/netG_epoch_{epoch}.pth')
         torch.save(D.state_dict(), f'{outf}/netD_ndf_{D_ndf}_epoch_{epoch}.pth')
 
-    results = {'nbperobj': nb_backgrounds, 'D_ndf': D_ndf, 'obj_format': obj_format, 'maxsize': maxsize, 'batch_size': batch_size, 'glr':g_to_d_lr, 'lr':lr, 'niter':niter,
+    results = {'nbperobj': nb_backgrounds, 'D_ndf': D_ndf, 'obj_format': obj_format, 'maxsize': maxsize, 'batch_size': batch_size, 'glr':g_to_d_lr, 'lr':lr, 'niter':niter, 'lambda':lbda,
                'train_gen': train_gen, 'category': category,
                'precision': np.array(precisions), 'means': np.array(means), 'stds': np.array(stds), 'grad_norms': np.array(grad_norms)}
 
